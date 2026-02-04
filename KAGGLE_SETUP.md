@@ -18,18 +18,18 @@ Train your Infrastructure-as-Code LLM on free Kaggle GPUs.
 # T4 GPUs have 15GB VRAM - use smaller batch size!
 
 MODEL_DEPTH = 12        # 12 (~300M, ~3hrs) | 16 (~500M, ~8hrs) | 20 (~800M, ~18hrs)
-BATCH_SIZE = 4          # 4 for T4 GPUs (DO NOT increase to 8!)
+BATCH_SIZE = 2          # 2 for T4 GPUs (SAFE MODE - prevents OOM)
 NUM_GPUS = 2            # Kaggle T4 x2
 WINDOW_PATTERN = "L"    # Use "L" (full attention) instead of "SSSL" for T4s
 
 print(f"Training config: d{MODEL_DEPTH} model, batch_size={BATCH_SIZE}, gpus={NUM_GPUS}")
 ```
 
-**Why batch_size=4?**
+**Why batch_size=2?**
 - T4 GPUs have 15GB VRAM (vs H100's 80GB)
 - Without Flash Attention 3, memory usage is higher
-- Batch size 8 = OOM error ❌
-- Batch size 4 = Works perfectly ✅
+- Batch size 4 = OOM error during backward pass ❌
+- Batch size 2 = Safe Mode works perfectly ✅
 
 ---
 
@@ -115,7 +115,7 @@ print(f"Running: {cmd}")
 ```
 
 **Key changes from original:**
-- `--device-batch-size=4` (was 8)
+- `--device-batch-size=2` (was 8)
 - `--window-pattern=L` (was SSSL, which caused OOM)
 
 **Training time:**
@@ -128,7 +128,7 @@ print(f"Running: {cmd}")
 ## 📈 7. Evaluate Model
 
 ```bash
-!python3 -m scripts.base_eval --device-batch-size=4
+!python3 -m scripts.base_eval --device-batch-size=2
 ```
 
 **Expected metrics:**
@@ -179,7 +179,7 @@ TOTAL          : 11,188 files
 ### Training Stats (d12 model)
 ```
 Model: 286M parameters
-Batch size: 4
+Batch size: 2
 GPUs: 2x T4
 Training time: ~3 hours
 Cost: FREE on Kaggle!
