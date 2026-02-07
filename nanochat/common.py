@@ -201,7 +201,7 @@ class DummyWandb:
     def finish(self):
         pass
 
-# hardcoded BF16 peak flops for various GPUs
+# hardcoded peak flops for various GPUs (BF16 or FP16 tensor core, whichever the GPU supports)
 # inspired by torchtitan: https://github.com/pytorch/torchtitan/blob/main/torchtitan/tools/utils.py
 # and PR: https://github.com/karpathy/nanochat/pull/147
 def get_peak_flops(device_name: str) -> float:
@@ -240,6 +240,10 @@ def get_peak_flops(device_name: str) -> float:
         (["mi300a"], 980.6e12),
         (["mi250x"], 383e12),
         (["mi250"], 362.1e12),
+        # NVIDIA Turing (FP16 tensor core)
+        (["v100", "sxm"], 125e12),
+        (["v100"], 112e12),
+        (["t4"], 65e12),
         # Consumer RTX
         (["5090"], 209.5e12),
         (["4090"], 165.2e12),

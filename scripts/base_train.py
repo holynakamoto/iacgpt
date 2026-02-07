@@ -63,6 +63,7 @@ parser.add_argument("--warmup-ratio", type=float, default=0.0, help="ratio of it
 parser.add_argument("--warmdown-ratio", type=float, default=0.5, help="ratio of iterations for LR warmdown")
 parser.add_argument("--final-lr-frac", type=float, default=0.0, help="final LR as fraction of initial LR")
 parser.add_argument("--resume-from-step", type=int, default=-1, help="resume training from this step (-1 = disable)")
+parser.add_argument("--max-epochs", type=int, default=50, help="stop training after this many epochs to prevent overfitting on small corpora (-1 = disable)")
 # Evaluation
 parser.add_argument("--eval-every", type=int, default=250, help="evaluate val bpb every N steps (-1 = disable)")
 parser.add_argument("--eval-tokens", type=int, default=20*524288, help="number of tokens to evaluate val loss on")
@@ -80,15 +81,24 @@ user_config = vars(args).copy()  # for logging
 device_type = autodetect_device_type() if args.device_type == "" else args.device_type
 ddp, ddp_rank, ddp_local_rank, ddp_world_size, device = compute_init(device_type)
 master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.
-autocast_ctx = torch.amp.autocast(device_type=device_type, dtype=torch.bfloat16) if device_type == "cuda" else nullcontext()
 synchronize = torch.cuda.synchronize if device_type == "cuda" else lambda: None
 get_max_memory = torch.cuda.max_memory_allocated if device_type == "cuda" else lambda: 0
 if device_type == "cuda":
     gpu_device_name = torch.cuda.get_device_name(0)
     gpu_peak_flops = get_peak_flops(gpu_device_name)
-    print0(f"GPU: {gpu_device_name} | Peak FLOPS (BF16): {gpu_peak_flops:.2e}")
+    if torch.cuda.is_bf16_supported():
+        amp_dtype = torch.bfloat16
+        print0(f"GPU: {gpu_device_name} | Peak FLOPS (BF16): {gpu_peak_flops:.2e}")
+    else:
+        amp_dtype = torch.float16
+        print0(f"GPU: {gpu_device_name} | Peak FLOPS (FP16): {gpu_peak_flops:.2e}")
+        print0("GPU does not support bfloat16, using float16 with GradScaler")
+    autocast_ctx = torch.amp.autocast(device_type=device_type, dtype=amp_dtype)
 else:
+    amp_dtype = None
     gpu_peak_flops = float('inf')  # MFU not meaningful for CPU/MPS
+    autocast_ctx = nullcontext()
+scaler = torch.amp.GradScaler(enabled=(amp_dtype == torch.float16))
 
 # wandb logging init
 use_dummy_wandb = args.run == "dummy" or not master_process
@@ -134,6 +144,13 @@ tokens_per_fwdbwd = args.device_batch_size * args.max_seq_len # tokens per itera
 world_tokens_per_fwdbwd = tokens_per_fwdbwd * ddp_world_size # total tokens per iteration for all ranks
 assert args.total_batch_size % world_tokens_per_fwdbwd == 0
 grad_accum_steps = args.total_batch_size // world_tokens_per_fwdbwd
+# Auto-reduce total batch size if gradient accumulation would be excessive (e.g. 2x T4 with default batch)
+MAX_GRAD_ACCUM = 16
+if grad_accum_steps > MAX_GRAD_ACCUM:
+    old_total_batch = args.total_batch_size
+    args.total_batch_size = world_tokens_per_fwdbwd * MAX_GRAD_ACCUM
+    grad_accum_steps = MAX_GRAD_ACCUM
+    print0(f"Auto-reduced total batch size from {old_total_batch:,} to {args.total_batch_size:,} (capping grad accum at {MAX_GRAD_ACCUM})")
 print0(f"Tokens / micro-batch / rank: {args.device_batch_size} x {args.max_seq_len} = {tokens_per_fwdbwd:,}")
 print0(f"Tokens / micro-batch: {world_tokens_per_fwdbwd:,}")
 print0(f"Total batch size {args.total_batch_size:,} => gradient accumulation steps: {grad_accum_steps}")
@@ -375,7 +392,7 @@ while True:
             loss = model(x, y)
         train_loss = loss.detach() # for logging
         loss = loss / grad_accum_steps # each .backward() is a grad sum => normalize loss here
-        loss.backward()
+        scaler.scale(loss).backward()
         x, y, dataloader_state_dict = next(train_loader) # prefetch the next batch while the GPU is busy with forward/backward
     # step the optimizer
     lrm = get_lr_multiplier(step)
@@ -386,7 +403,8 @@ while True:
         if group['kind'] == 'muon':
             group["momentum"] = muon_momentum
             group["weight_decay"] = muon_weight_decay
-    optimizer.step()
+    scaler.step(optimizer)
+    scaler.update()
     model.zero_grad(set_to_none=True)
     train_loss_f = train_loss.item() # .item() is a CPU-GPU sync point
     synchronize()
@@ -415,6 +433,10 @@ while True:
         eta_str = ""
     epoch = dataloader_state_dict["epoch"]
     print0(f"step {step:05d}/{num_iterations:05d} ({pct_done:.2f}%) | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | dt: {dt * 1000:.2f}ms | tok/sec: {tok_per_sec:,} | mfu: {mfu:.2f} | epoch: {epoch} | total time: {total_training_time/60:.2f}m{eta_str}")
+    # Early stopping: cap training at max_epochs to prevent overfitting on small corpora
+    if args.max_epochs > 0 and epoch > args.max_epochs and step + 1 < num_iterations:
+        print0(f"Reached epoch {epoch} > max_epochs={args.max_epochs}, stopping early to prevent overfitting")
+        num_iterations = step + 1  # next iteration will trigger last_step for final eval/save
     if step % 100 == 0:
         log_data = {
             "step": step,
