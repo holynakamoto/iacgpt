@@ -21,14 +21,14 @@ from contextlib import nullcontext
 import wandb
 import torch
 
-from nanochat.gpt import GPT, GPTConfig
-from nanochat.dataloader import tokenizing_distributed_data_loader_bos_bestfit, tokenizing_distributed_data_loader_with_state_bos_bestfit
-from nanochat.common import compute_init, compute_cleanup, print0, DummyWandb, print_banner, get_base_dir, autodetect_device_type, get_peak_flops
-from nanochat.tokenizer import get_tokenizer, get_token_bytes
-from nanochat.checkpoint_manager import save_checkpoint, load_checkpoint
-from nanochat.loss_eval import evaluate_bpb
-from nanochat.engine import Engine
-from nanochat.flash_attention import HAS_FA3
+from gpt import GPT, GPTConfig
+from dataloader import tokenizing_distributed_data_loader_bos_bestfit, tokenizing_distributed_data_loader_with_state_bos_bestfit
+from common import compute_init, compute_cleanup, print0, DummyWandb, print_banner, get_base_dir, autodetect_device_type, get_peak_flops
+from tokenizer import get_tokenizer, get_token_bytes
+from checkpoint_manager import save_checkpoint, load_checkpoint
+from loss_eval import evaluate_bpb
+from engine import Engine
+from flash_attention import HAS_FA3
 from scripts.base_eval import evaluate_core
 print_banner()
 
@@ -472,7 +472,7 @@ if val_bpb is not None:
     print0(f"Minimum validation bpb: {min_val_bpb:.6f}")
 
 # Log to report
-from nanochat.report import get_report
+from report import get_report
 get_report().log(section="Base model training", data=[
     user_config, # CLI args
     { # stats about the training setup

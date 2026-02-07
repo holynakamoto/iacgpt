@@ -103,10 +103,9 @@ The IaC training corpus is built from:
 │   ├── chat_sft.py                 # SFT for DevOps persona
 │   ├── chat_cli.py                 # CLI interface
 │   └── chat_web.py                 # Web UI
-└── nanochat/
-    ├── gpt.py                      # Transformer model
-    ├── tokenizer.py                # BPE tokenizer
-    └── dataloader.py               # Data pipeline
+├── gpt.py                          # Transformer model
+├── tokenizer.py                    # BPE tokenizer
+└── dataloader.py                   # Data pipeline
 ```
 
 ## Technical Specs
