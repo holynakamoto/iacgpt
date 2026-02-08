@@ -4,7 +4,7 @@ project: IACGPT-V2
 
 training:
   engine: kaggle-kernel
-  accelerator: gpu_p100
+  accelerator: gpu_t4
   notebook: kaggle_iacgpt_training.ipynb
 
 kaggle_config:
