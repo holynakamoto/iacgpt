@@ -24,6 +24,15 @@ from types import SimpleNamespace
 import wandb
 import torch
 
+# XLA/TPU support
+try:
+    import torch_xla
+    import torch_xla.core.xla_model as xm
+    import torch_xla.runtime as xr
+    HAS_XLA = True
+except ImportError:
+    HAS_XLA = False
+
 from gpt import GPT, GPTConfig
 from dataloader import tokenizing_distributed_data_loader_bos_bestfit, tokenizing_distributed_data_loader_with_state_bos_bestfit
 from common import compute_init, compute_cleanup, print0, DummyWandb, print_banner, get_base_dir, autodetect_device_type, get_peak_flops, has_bf16_support
@@ -113,9 +122,20 @@ user_config = vars(args).copy()  # for logging
 device_type = autodetect_device_type() if args.device_type == "" else args.device_type
 ddp, ddp_rank, ddp_local_rank, ddp_world_size, device = compute_init(device_type)
 master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.
-synchronize = torch.cuda.synchronize if device_type == "cuda" else lambda: None
-get_max_memory = torch.cuda.max_memory_allocated if device_type == "cuda" else lambda: 0
-if device_type == "cuda":
+
+# Device-specific setup
+if device_type == "xla":
+    # TPU/XLA setup
+    synchronize = lambda: xm.mark_step()
+    get_max_memory = lambda: 0  # TPU memory tracking not implemented
+    amp_dtype = torch.bfloat16  # TPUs natively support bfloat16
+    autocast_ctx = nullcontext()  # TPU doesn't need autocast
+    gpu_peak_flops = float('inf')  # MFU not meaningful for TPU yet
+    print0(f"TPU device: {device} | Cores: {xr.world_size()} | Native bfloat16 support")
+    print0("XLA/TPU training enabled")
+elif device_type == "cuda":
+    synchronize = torch.cuda.synchronize
+    get_max_memory = torch.cuda.max_memory_allocated
     gpu_device_name = torch.cuda.get_device_name(0)
     gpu_peak_flops = get_peak_flops(gpu_device_name)
     if has_bf16_support():
@@ -127,9 +147,13 @@ if device_type == "cuda":
         print0("GPU does not support bfloat16, using float16 with GradScaler")
     autocast_ctx = torch.amp.autocast(device_type=device_type, dtype=amp_dtype)
 else:
+    # CPU/MPS setup
+    synchronize = lambda: None
+    get_max_memory = lambda: 0
     amp_dtype = torch.float32  # Use float32 for CPU/MPS
     gpu_peak_flops = float('inf')  # MFU not meaningful for CPU/MPS
     autocast_ctx = nullcontext()
+
 scaler = torch.amp.GradScaler(enabled=(amp_dtype == torch.float16))
 
 # wandb logging init
@@ -443,8 +467,15 @@ while True:
         if group['kind'] == 'muon':
             group["momentum"] = muon_momentum
             group["weight_decay"] = muon_weight_decay
-    scaler.step(optimizer)
-    scaler.update()
+
+    if device_type == "xla":
+        # TPU: use XLA optimizer step (no scaler needed for bfloat16)
+        xm.optimizer_step(optimizer)
+    else:
+        # GPU/CPU: use standard step with optional gradient scaling
+        scaler.step(optimizer)
+        scaler.update()
+
     model.zero_grad(set_to_none=True)
     train_loss_f = train_loss.item() # .item() is a CPU-GPU sync point
     synchronize()

@@ -140,7 +140,20 @@ def get_dist_info():
         return False, 0, 0, 1
 
 def autodetect_device_type():
-    # prefer to use CUDA if available, otherwise use MPS, otherwise fallback on CPU
+    # Check for TPU/XLA first (Colab, Kaggle)
+    try:
+        import torch_xla
+        import torch_xla.runtime as xr
+        device = torch_xla.device()
+        device_type = "xla"
+        print0(f"Autodetected device type: {device_type} (TPU with {xr.world_size()} cores)")
+        return device_type
+    except ImportError:
+        pass
+    except Exception as e:
+        print0(f"TPU detection failed: {e}")
+
+    # Fallback: prefer CUDA if available, otherwise use MPS, otherwise fallback on CPU
     if torch.cuda.is_available():
         device_type = "cuda"
     elif torch.backends.mps.is_available():
@@ -167,14 +180,20 @@ def has_bf16_support():
     major, minor = torch.cuda.get_device_capability(0)
     return major >= 8
 
-def compute_init(device_type="cuda"): # cuda|cpu|mps
+def compute_init(device_type="cuda"): # cuda|cpu|mps|xla
     """Basic initialization that we keep doing over and over, so make common."""
 
-    assert device_type in ["cuda", "mps", "cpu"], "Invalid device type atm"
+    assert device_type in ["cuda", "mps", "cpu", "xla"], "Invalid device type"
     if device_type == "cuda":
         assert torch.cuda.is_available(), "Your PyTorch installation is not configured for CUDA but device_type is 'cuda'"
     if device_type == "mps":
         assert torch.backends.mps.is_available(), "Your PyTorch installation is not configured for MPS but device_type is 'mps'"
+    if device_type == "xla":
+        try:
+            import torch_xla
+            import torch_xla.runtime as xr
+        except ImportError:
+            raise ImportError("torch_xla not available but device_type is 'xla'. Install with: pip install torch-xla")
 
     # Reproducibility
     # Note that we set the global seeds here, but most of the code uses explicit rng objects.
@@ -182,6 +201,9 @@ def compute_init(device_type="cuda"): # cuda|cpu|mps
     torch.manual_seed(42)
     if device_type == "cuda":
         torch.cuda.manual_seed(42)
+    elif device_type == "xla":
+        import torch_xla.core.xla_model as xm
+        xm.set_rng_state(42)
     # skipping full reproducibility for now, possibly investigate slowdown later
     # torch.use_deterministic_algorithms(True)
 
@@ -190,8 +212,13 @@ def compute_init(device_type="cuda"): # cuda|cpu|mps
         torch.backends.fp32_precision = "tf32" # uses tf32 instead of fp32 for matmuls
 
     # Distributed setup: Distributed Data Parallel (DDP), optional, and requires CUDA
+    # For XLA, we use single-core for now (multi-core support requires xla_dist launcher)
     is_ddp_requested, ddp_rank, ddp_local_rank, ddp_world_size = get_dist_info()
-    if is_ddp_requested and device_type == "cuda":
+    if device_type == "xla":
+        # XLA/TPU: use torch_xla.device()
+        import torch_xla
+        device = torch_xla.device()
+    elif is_ddp_requested and device_type == "cuda":
         device = torch.device("cuda", ddp_local_rank)
         torch.cuda.set_device(device)  # make "cuda" default to this device
         dist.init_process_group(backend="nccl", device_id=device)
