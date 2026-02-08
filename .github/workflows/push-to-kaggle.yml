@@ -1,0 +1,55 @@
+name: Push to Kaggle
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'kaggle_iacgpt_training.ipynb'
+      - 'claude.yml'
+      - '.github/workflows/push-to-kaggle.yml'
+  workflow_dispatch:
+
+jobs:
+  push-notebook:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install UV
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Setup Python
+        run: uv python install 3.10
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Setup Kaggle credentials
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+        run: |
+          mkdir -p ~/.kaggle
+          echo '{"username":"${{ secrets.KAGGLE_USERNAME }}","key":"${{ secrets.KAGGLE_KEY }}"}' > ~/.kaggle/kaggle.json
+          chmod 600 ~/.kaggle/kaggle.json
+
+      - name: Push notebook to Kaggle
+        run: |
+          uv run python scripts/kaggle_runner.py
+          echo "✅ Notebook pushed to Kaggle!"
+          echo "🔗 View at: https://www.kaggle.com/code/nicksmoore/iacgpt-v2"
+
+      - name: Summary
+        run: |
+          echo "## 🚀 Notebook Updated on Kaggle" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Your IaC-GPT training notebook has been pushed to Kaggle." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Next steps:**" >> $GITHUB_STEP_SUMMARY
+          echo "1. Visit [your kernel](https://www.kaggle.com/code/nicksmoore/iacgpt-v2)" >> $GITHUB_STEP_SUMMARY
+          echo "2. Click **Run** to start training on GPU P100" >> $GITHUB_STEP_SUMMARY
+          echo "3. Monitor progress in real-time on Kaggle" >> $GITHUB_STEP_SUMMARY

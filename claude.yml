@@ -1,0 +1,18 @@
+# claude.yml
+# Configuration for orchestrated IaC-GPT training on Kaggle
+project: IACGPT-V2
+
+training:
+  engine: kaggle-kernel
+  accelerator: gpu_p100
+  notebook: kaggle_iacgpt_training.ipynb
+
+kaggle_config:
+  slug: nicksmoore/iacgpt-v2
+  is_private: true
+  environment: python3.12
+  gpu: true
+  internet: true
+
+# This file is used by scripts/kaggle_runner.py to automate kernel execution
+# Run with: uv run python scripts/kaggle_runner.py --wait
