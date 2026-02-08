@@ -72,8 +72,9 @@ class KaggleRunner:
 
         return metadata
 
-    def push_kernel(self, notebook_path: str, working_dir: Optional[str] = None) -> bool:
-        """Push notebook to Kaggle as a kernel."""
+    def push_and_run(self, notebook_path: str, working_dir: Optional[str] = None,
+                     timeout_hours: int = 4) -> bool:
+        """Push notebook to Kaggle and trigger execution."""
         if working_dir is None:
             working_dir = Path(notebook_path).parent
 
@@ -84,15 +85,19 @@ class KaggleRunner:
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2)
 
+        timeout_seconds = timeout_hours * 3600
+
         print(f"📤 Pushing kernel to Kaggle: {self.slug}")
         print(f"   GPU: {metadata['enable_gpu']}")
         print(f"   Internet: {metadata['enable_internet']}")
         print(f"   Private: {metadata['is_private']}")
+        print(f"   Timeout: {timeout_hours}h ({timeout_seconds}s)")
+        print(f"\n⚡ This will automatically START EXECUTION on Kaggle...")
 
         try:
-            # Push the kernel
-            api.kernels_push(str(working_dir))
-            print(f"✅ Kernel pushed successfully!")
+            # Push the kernel with timeout (triggers execution)
+            api.kernels_push(str(working_dir), timeout=timeout_seconds)
+            print(f"✅ Kernel pushed and execution started!")
             return True
         except Exception as e:
             print(f"❌ Error pushing kernel: {e}")
@@ -146,10 +151,10 @@ def main():
                        help="Path to notebook to run")
     parser.add_argument("--config", default="claude.yml",
                        help="Path to claude.yml config file")
-    parser.add_argument("--wait", action="store_true",
-                       help="Wait for kernel to start running")
-    parser.add_argument("--timeout", type=int, default=300,
-                       help="Timeout in seconds when waiting (default: 300)")
+    parser.add_argument("--timeout-hours", type=int, default=4,
+                       help="Max execution time in hours (default: 4)")
+    parser.add_argument("--monitor", action="store_true",
+                       help="Monitor execution output (experimental)")
 
     args = parser.parse_args()
 
@@ -170,20 +175,27 @@ def main():
         print(f"❌ Error initializing runner: {e}")
         sys.exit(1)
 
-    # Push kernel
-    success = runner.push_kernel(args.notebook)
+    # Push and run kernel
+    success = runner.push_and_run(args.notebook, timeout_hours=args.timeout_hours)
 
     if not success:
         sys.exit(1)
 
-    print(f"\n🔗 View kernel at: {runner.get_kernel_url()}")
-    print(f"\n💡 Next steps:")
-    print(f"   1. Visit the URL above")
-    print(f"   2. Click 'Run' to start training on GPU P100")
-    print(f"   3. Monitor progress in real-time on Kaggle")
+    print(f"\n🔗 Monitor kernel at: {runner.get_kernel_url()}")
+    print(f"\n✅ Training is now running on Kaggle!")
+    print(f"\n💡 To monitor output:")
+    print(f"   kaggle kernels output {runner.slug}")
 
-    # Note: Status checking often gets 403 Forbidden for new kernels
-    # Users should manually check the kernel URL instead
+    if args.monitor:
+        print(f"\n📊 Fetching initial output...")
+        try:
+            # Wait a bit for execution to start
+            time.sleep(10)
+            output = api.kernels_output(runner.slug)
+            print(output)
+        except Exception as e:
+            print(f"⚠️  Could not fetch output yet: {e}")
+            print(f"   Check the URL above for live updates")
 
 
 if __name__ == "__main__":
